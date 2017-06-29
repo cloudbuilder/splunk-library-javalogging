@@ -134,7 +134,7 @@ public final class HttpEventCollectorLog4jAppender extends AbstractAppender
             layout = PatternLayout.createLayout("%m", null, null, Charset.forName("UTF-8"), true, false, null, null);
         }
 
-        final boolean ignoreExceptions = true;
+        final boolean ignoreExceptions = false;
 
         return new HttpEventCollectorLog4jAppender(
                 name, url, token,

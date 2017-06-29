@@ -23,16 +23,17 @@ import org.apache.http.client.methods.HttpPost;
 import org.apache.http.concurrent.FutureCallback;
 import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
 import org.apache.http.conn.ssl.SSLContexts;
+import javax.net.ssl.SSLContext;
 import org.apache.http.conn.ssl.TrustStrategy;
 import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.nio.client.CloseableHttpAsyncClient;
 import org.apache.http.impl.nio.client.HttpAsyncClients;
 import org.apache.http.util.EntityUtils;
+import javax.net.ssl.SSLHandshakeException;
 
 import org.json.simple.JSONObject;
-import javax.net.ssl.SSLContext;
-import java.io.IOException;
-import java.io.Serializable;
+
+import java.io.*;
 import java.security.cert.X509Certificate;
 import java.util.Dictionary;
 import java.util.Timer;
@@ -42,6 +43,7 @@ import java.util.LinkedList;
 import java.util.Map;
 import java.util.Locale;
 
+// testing
 
 
 /**
@@ -100,6 +102,8 @@ final class HttpEventCollectorSender extends TimerTask implements HttpEventColle
     private HttpEventCollectorMiddleware middleware = new HttpEventCollectorMiddleware();
     private final String channel = newChannel();
     private boolean ack = false;	
+    private int fall_back_to_cloud_ssl_cert;
+    private int maxConnTotal;
 
     /**
      * Initialize HttpEventCollectorSender
@@ -143,6 +147,10 @@ final class HttpEventCollectorSender extends TimerTask implements HttpEventColle
             timer = new Timer();
             timer.scheduleAtFixedRate(this, delay, delay);
         }
+
+        // limit max  number of async requests in sequential mode, 0 means "use
+        // default limit"
+        maxConnTotal = sendMode == SendMode.Sequential ? 1 : 0;
     }
 
     public void addMiddleware(HttpEventCollectorMiddleware.HttpSenderMiddleware middleware) {
@@ -265,14 +273,16 @@ final class HttpEventCollectorSender extends TimerTask implements HttpEventColle
             // http client is already started
             return;
         }
-        // limit max  number of async requests in sequential mode, 0 means "use
-        // default limit"
-        int maxConnTotal = sendMode == SendMode.Sequential ? 1 : 0;
+
         if (! disableCertificateValidation) {
             // create an http client that validates certificates
-            httpClient = HttpAsyncClients.custom()
-                    .setMaxConnTotal(maxConnTotal)
-                    .build();
+            try {
+                httpClient = HttpAsyncClients.custom()
+                        .setMaxConnTotal(maxConnTotal)
+                        .build();
+                // set up sslContext
+
+            } catch (Exception ex) { System.out.println("ex: " + ex);}
         } else {
             // create strategy that accepts all certificates
             TrustStrategy acceptingTrustStrategy = new TrustStrategy() {
@@ -319,9 +329,24 @@ final class HttpEventCollectorSender extends TimerTask implements HttpEventColle
 
             @Override
             public void failed(Exception ex) {
-                HttpEventCollectorErrorHandler.error(
-                        eventsBatch,
-                        new HttpEventCollectorErrorHandler.ServerErrorException(ex.getMessage()));
+                if (fall_back_to_cloud_ssl_cert < 10) {
+                    System.out.println(
+                            "postEventsAsync: middleware.postEvents: failed: ex: "
+                                    + ex + ", fall_back_to_cloud_ssl_cert:"
+                                    + fall_back_to_cloud_ssl_cert);
+                    fall_back_to_cloud_ssl_cert++;
+                    httpClient = HttpEventCollectorSslUtils.build_http_client_cloud_trail(maxConnTotal);
+                    httpClient.start();
+                    postEventsAsync(events);
+                } else {
+                    System.out.println(
+                            "postEventsAsync: middleware.postEvents: failed: ex: "
+                                    + ex + ", fall_back_to_cloud_ssl_cert:"
+                                    + fall_back_to_cloud_ssl_cert);
+                    HttpEventCollectorErrorHandler.error(
+                            eventsBatch,
+                            new HttpEventCollectorErrorHandler.ServerErrorException(ex.getMessage()));
+                }
             }
         });
     }
@@ -340,11 +365,11 @@ final class HttpEventCollectorSender extends TimerTask implements HttpEventColle
         httpPost.setHeader(
                 AuthorizationHeaderTag,
                 String.format(AuthorizationHeaderScheme, token));
-		   if (ack) { //only send channel UUID if we are using acks 
-			httpPost.setHeader(
+		   if (ack) { //only send channel UUID if we are using acks
+                httpPost.setHeader(
 					ChannelHeader,
 					getChannel());
-		    } 
+           }
 		
         StringEntity entity = new StringEntity(eventsBatchString.toString(), encoding);
         entity.setContentType(HttpContentType);
@@ -358,7 +383,7 @@ final class HttpEventCollectorSender extends TimerTask implements HttpEventColle
                //if (httpStatusCode != 200) {
                     try {
                         reply = EntityUtils.toString(response.getEntity(), encoding);
-				         System.out.println("reply: "+ reply);	//fixme undo hack 		
+				         System.out.println("reply: "+ reply);	//fixme undo hack
                     } catch (IOException e) {
 				//if IOException ocurrs toStringing response, this is not something we can expect client 
 				//to handle
@@ -371,7 +396,19 @@ final class HttpEventCollectorSender extends TimerTask implements HttpEventColle
 
             @Override
             public void failed(Exception ex) {
-                callback.failed(ex);
+
+                if (fall_back_to_cloud_ssl_cert < 10) {
+                    System.out.println(
+                            "postEvents: failed: ex: "
+                                + ex + ", fall_back_to_cloud_ssl_cert:"
+                                + fall_back_to_cloud_ssl_cert);
+                    fall_back_to_cloud_ssl_cert++;
+                    httpClient = HttpEventCollectorSslUtils.build_http_client_cloud_trail(maxConnTotal);
+                    httpClient.start();
+                    postEvents(events, callback);
+                } else {
+                    callback.failed(ex);
+                }
             }
 
             @Override
