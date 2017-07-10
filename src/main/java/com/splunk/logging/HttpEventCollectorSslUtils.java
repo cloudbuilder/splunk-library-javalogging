@@ -30,10 +30,12 @@ public class HttpEventCollectorSslUtils {
 
     public static SSLContext build_ssl_context(String cert_content) {
         try {
+
+
             // load certificate from file
 //            System.out.println("cert_content: " + cert_content); // TODO remove this debug output
             X509Certificate cert = CertStrToX509(cert_content);
-//            System.out.println("cert: " + cert); // TODO remove this debug output
+            System.out.println("cert: " + cert); // TODO remove this debug output
 
             // add cloudCA to the KetStore
             KeyStore keystore = KeyStore.getInstance(KeyStore.getDefaultType());

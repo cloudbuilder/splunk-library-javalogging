@@ -60,9 +60,9 @@ final class HttpEventCollectorSender extends TimerTask implements HttpEventColle
     private static final String HttpContentType = "application/json; profile=urn:splunk:event:1.0; charset=utf-8";
     private static final String SendModeSequential = "sequential";
     private static final String SendModeSParallel = "parallel";
-    private static final String ChannelHeader = "X-Splunk-Request-Channel";	
+    private static final String ChannelHeader = "X-Splunk-Request-Channel";
 
-	public String getChannel() {
+    public String getChannel() {
 		return channel;
 	}
 	
@@ -102,8 +102,11 @@ final class HttpEventCollectorSender extends TimerTask implements HttpEventColle
     private HttpEventCollectorMiddleware middleware = new HttpEventCollectorMiddleware();
     private final String channel = newChannel();
     private boolean ack = false;	
-    private int fall_back_to_cloud_ssl_cert;
     private int maxConnTotal;
+
+    // vars related to reconnect attempts
+    private int reconnect_attempts;
+    private boolean connected = false;
 
     /**
      * Initialize HttpEventCollectorSender
@@ -320,6 +323,7 @@ final class HttpEventCollectorSender extends TimerTask implements HttpEventColle
         this.middleware.postEvents(events, this, new HttpEventCollectorMiddleware.IHttpSenderCallback() {
             @Override
             public void completed(int statusCode, String reply) {
+                connected = true;
                 if (statusCode != 200) {
                     HttpEventCollectorErrorHandler.error(
                             events,
@@ -329,20 +333,20 @@ final class HttpEventCollectorSender extends TimerTask implements HttpEventColle
 
             @Override
             public void failed(Exception ex) {
-                if (fall_back_to_cloud_ssl_cert < 10) {
+                if (!connected && reconnect_attempts < 10) {
                     System.out.println(
                             "postEventsAsync: middleware.postEvents: failed: ex: "
-                                    + ex + ", fall_back_to_cloud_ssl_cert:"
-                                    + fall_back_to_cloud_ssl_cert);
-                    fall_back_to_cloud_ssl_cert++;
+                                    + ex + ", reconnect_attempts:"
+                                    + reconnect_attempts);
+                    reconnect_attempts++;
                     httpClient = HttpEventCollectorSslUtils.build_http_client_cloud_trail(maxConnTotal);
                     httpClient.start();
                     postEventsAsync(events);
                 } else {
                     System.out.println(
                             "postEventsAsync: middleware.postEvents: failed: ex: "
-                                    + ex + ", fall_back_to_cloud_ssl_cert:"
-                                    + fall_back_to_cloud_ssl_cert);
+                                    + ex + ", reconnect_attempts:"
+                                    + reconnect_attempts);
                     HttpEventCollectorErrorHandler.error(
                             eventsBatch,
                             new HttpEventCollectorErrorHandler.ServerErrorException(ex.getMessage()));
@@ -391,18 +395,19 @@ final class HttpEventCollectorSender extends TimerTask implements HttpEventColle
                         //reply = e.getMessage();
                     }
                 //}
+                connected = true;
                 callback.completed(httpStatusCode, reply);
             }
 
             @Override
             public void failed(Exception ex) {
 
-                if (fall_back_to_cloud_ssl_cert < 10) {
+                if (reconnect_attempts < 10) {
                     System.out.println(
                             "postEvents: failed: ex: "
-                                + ex + ", fall_back_to_cloud_ssl_cert:"
-                                + fall_back_to_cloud_ssl_cert);
-                    fall_back_to_cloud_ssl_cert++;
+                                + ex + ", reconnect_attempts:"
+                                + reconnect_attempts);
+                    reconnect_attempts++;
                     httpClient = HttpEventCollectorSslUtils.build_http_client_cloud_trail(maxConnTotal);
                     httpClient.start();
                     postEvents(events, callback);
